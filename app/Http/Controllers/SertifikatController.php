@@ -63,21 +63,19 @@ class SertifikatController extends Controller
             'kegiatan_id' => 'required|exists:kegiatans,id',
             'template' => 'required|in:kajian,workshop,pelatihan,default',
             'input_method' => 'required|in:manual,upload,from_peserta',
-            'participants' => 'required_if:input_method,manual|nullable|string',
-            'peserta_selected' => 'required_if:input_method,from_peserta|nullable|array',
-            'peserta_selected.*' => 'string',
+            'participants' => 'required_if:input_method,manual|string',
             'excel_file' => 'required_if:input_method,upload|file|mimes:xlsx,xls',
             'ttd_pejabat' => 'nullable|string|max:255',
             'jabatan_pejabat' => 'nullable|string|max:255',
         ]);
 
         $kegiatan = Kegiatan::findOrFail($validated['kegiatan_id']);
-        
+
         // Validate kegiatan has required fields
         if (empty($kegiatan->nama_kegiatan)) {
             return back()->with('error', 'Data kegiatan tidak lengkap. Nama kegiatan tidak ditemukan.');
         }
-        
+
         $pesertaList = [];
 
         // Get participants based on input method
@@ -88,11 +86,16 @@ class SertifikatController extends Controller
             // TODO: Implement Excel parsing
             return back()->with('error', 'Upload Excel belum diimplementasikan');
         } elseif ($validated['input_method'] === 'from_peserta') {
-            // Get from selected participants (via checkboxes)
-            $pesertaList = $request->input('peserta_selected', []);
-            
-            if (empty($pesertaList)) {
-                return back()->with('error', 'Tidak ada peserta yang dipilih. Silakan pilih minimal 1 peserta.');
+            // Get from registered participants who attended
+            $peserta = KegiatanPeserta::where('kegiatan_id', $kegiatan->id)
+                ->whereHas('absensi', function ($q) {
+                    $q->where('status_kehadiran', 'hadir');
+                })
+                ->with('user')
+                ->get();
+
+            foreach ($peserta as $p) {
+                $pesertaList[] = $p->user ? $p->user->name : $p->nama_peserta;
             }
         }
 
@@ -102,25 +105,11 @@ class SertifikatController extends Controller
 
         // Generate certificates
         $generated = [];
-        
-        // Get max urutan for this kegiatan (including soft deleted)
-        $lastCert = Sertifikat::withTrashed()
-            ->where('kegiatan_id', $kegiatan->id)
-            ->orderBy('id', 'desc')
-            ->first();
-        
-        // Extract urutan from last nomor_sertifikat if exists, else start from 1
-        $urutan = 1;
-        if ($lastCert && $lastCert->nomor_sertifikat) {
-            // Format: CERT/YYYYMMDD/KID/URUT
-            $parts = explode('/', $lastCert->nomor_sertifikat);
-            if (count($parts) === 4) {
-                $urutan = intval($parts[3]) + 1;
-            }
-        }
+        $urutan = Sertifikat::where('kegiatan_id', $kegiatan->id)->count() + 1;
 
         foreach ($pesertaList as $namaPeserta) {
-            if (empty($namaPeserta)) continue;
+            if (empty($namaPeserta))
+                continue;
 
             $sertifikat = Sertifikat::create([
                 'kegiatan_id' => $kegiatan->id,
@@ -147,12 +136,12 @@ class SertifikatController extends Controller
         $this->activityLog->log(
             'create',
             'Sertifikat',
-            "Generate " . count($generated) . " sertifikat untuk kegiatan: {$kegiatan->nama_kegiatan}",
+            "Generate " . count($generated) . " sertifikat untuk kegiatan: {$kegiatan->nama}",
             ['kegiatan_id' => $kegiatan->id, 'jumlah' => count($generated)]
         );
 
         return redirect()
-            ->route('kegiatan.sertifikat.index', ['tab' => 'history'])
+            ->route('kegiatan.sertifikat.index')
             ->with('success', count($generated) . ' sertifikat berhasil digenerate');
     }
 
@@ -167,15 +156,15 @@ class SertifikatController extends Controller
         $pdf = Pdf::loadView('modules.kegiatan.sertifikat.pdf', [
             'sertifikat' => $sertifikat
         ]);
-        
+
         // Set paper to A4 landscape
         $pdf->setPaper('a4', 'landscape');
-        
+
         // Generate filename - remove special characters
         $cleanName = preg_replace('/[^A-Za-z0-9\-]/', '_', $sertifikat->nama_peserta);
         $cleanNumber = preg_replace('/[^A-Za-z0-9\-]/', '_', $sertifikat->nomor_sertifikat);
         $filename = 'Sertifikat_' . $cleanName . '_' . $cleanNumber . '.pdf';
-        
+
         // Log activity
         $this->activityLog->log(
             'download',
@@ -183,7 +172,7 @@ class SertifikatController extends Controller
             "Download sertifikat: {$sertifikat->nomor_sertifikat} - {$sertifikat->nama_peserta}",
             ['sertifikat_id' => $sertifikat->id]
         );
-        
+
         return $pdf->download($filename);
     }
 
@@ -228,7 +217,7 @@ class SertifikatController extends Controller
         );
 
         return redirect()
-            ->route('kegiatan.sertifikat.index', ['tab' => 'history'])
+            ->route('kegiatan.sertifikat.index')
             ->with('success', 'Sertifikat berhasil dihapus');
     }
 
@@ -238,19 +227,40 @@ class SertifikatController extends Controller
     public function getPeserta(Request $request)
     {
         $kegiatanId = $request->input('kegiatan_id');
-        
-        // Get all registered participants for this kegiatan
+
         $peserta = KegiatanPeserta::where('kegiatan_id', $kegiatanId)
+            ->whereHas('absensi', function ($q) {
+                $q->where('status_kehadiran', 'hadir');
+            })
             ->with('user')
             ->get()
             ->map(function ($p) {
                 return [
+                    'id' => $p->id,
                     'nama' => $p->user ? $p->user->name : $p->nama_peserta,
-                    'email' => $p->email,
-                    'status' => $p->status_pendaftaran ?? 'terdaftar',
+                    'email' => $p->email ?? ($p->user ? $p->user->email : null),
                 ];
             });
 
-        return response()->json($peserta);
+        return response()->json(['peserta' => $peserta]);
+    }
+
+    /**
+     * Display "My Certificates" for logged-in jamaah
+     */
+    public function mySertifikat()
+    {
+        $user = Auth::user();
+
+        // Get certificates by searching nama_peserta that matches user's name
+        $sertifikats = Sertifikat::with(['kegiatan'])
+            ->where('nama_peserta', $user->name)
+            ->orWhereHas('kegiatan.peserta', function ($q) use ($user) {
+                $q->where('user_id', $user->id);
+            })
+            ->orderBy('created_at', 'desc')
+            ->paginate(12);
+
+        return view('modules.kegiatan.sertifikat.my', compact('sertifikats'));
     }
 }

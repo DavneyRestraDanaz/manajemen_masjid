@@ -8,14 +8,16 @@
         "php": "^8.1",
         "barryvdh/laravel-dompdf": "^3.1",
         "laravel/framework": "^10.0|^11.0",
+        "maatwebsite/excel": "^3.1",
         "spatie/laravel-activitylog": "^4.7",
         "spatie/laravel-permission": "^5.10|^6.0"
     },
     "require-dev": {
-        "laravel/breeze": "^1.0",
         "fakerphp/faker": "^1.9.1",
+        "laravel/breeze": "^1.0",
         "laravel/pint": "^1.0",
         "laravel/sail": "^1.18",
+        "laravel/tinker": "^2.10",
         "mockery/mockery": "^1.4.4",
         "nunomaduro/collision": "^7.0|^8.0",
         "phpunit/phpunit": "^10.0"
@@ -59,7 +61,8 @@
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true
-        }
+        },
+        "cafile": "C:\\Users\\ACER\\Downloads\\Manpro Masjid/cacert.pem"
     },
     "minimum-stability": "stable",
     "prefer-stable": true

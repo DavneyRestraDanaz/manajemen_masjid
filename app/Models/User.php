@@ -29,6 +29,10 @@ class User extends Authenticatable
         'last_login_at',
         'login_attempts',
         'locked_until',
+        'is_verified',
+        'verified_at',
+        'verified_by',
+        'verification_notes',
     ];
 
     /**
@@ -52,7 +56,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
             'locked_until' => 'datetime',
+            'verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_verified' => 'boolean',
         ];
     }
 
@@ -102,7 +108,7 @@ class User extends Authenticatable
     public function incrementLoginAttempts(): void
     {
         $this->increment('login_attempts');
-        
+
         // Lock after 5 failed attempts
         if ($this->login_attempts >= 5) {
             $this->lockAccount();
@@ -135,6 +141,11 @@ class User extends Authenticatable
             return true;
         }
 
+        // Jamaah can access kegiatan module (view only features)
+        if ($module === 'kegiatan' && $this->hasRole('jamaah')) {
+            return true;
+        }
+
         // Check if user has any role related to the module
         return $this->hasAnyRole([
             "admin_{$module}",
@@ -149,8 +160,15 @@ class User extends Authenticatable
     {
         if ($this->hasRole('super_admin')) {
             return [
-                'jamaah', 'keuangan', 'kegiatan', 'zis', 
-                'kurban', 'inventaris', 'takmir', 'informasi', 'laporan'
+                'jamaah',
+                'keuangan',
+                'kegiatan',
+                'zis',
+                'kurban',
+                'inventaris',
+                'takmir',
+                'informasi',
+                'laporan'
             ];
         }
 
@@ -161,6 +179,11 @@ class User extends Authenticatable
             if (preg_match('/^(admin|pengurus)_(.+)$/', $role, $matches)) {
                 $modules[] = $matches[2];
             }
+        }
+
+        // Jamaah can access kegiatan module
+        if ($this->hasRole('jamaah') && !in_array('kegiatan', $modules)) {
+            $modules[] = 'kegiatan';
         }
 
         return array_unique($modules);
@@ -191,10 +214,70 @@ class User extends Authenticatable
     }
 
     /**
+     * Verify user as jamaah member
+     */
+    public function verify($verifiedBy = null, $notes = null): void
+    {
+        $this->update([
+            'is_verified' => true,
+            'verified_at' => now(),
+            'verified_by' => $verifiedBy ?? auth()->id(),
+            'verification_notes' => $notes,
+        ]);
+    }
+
+    /**
+     * Unverify user
+     */
+    public function unverify(): void
+    {
+        $this->update([
+            'is_verified' => false,
+            'verified_at' => null,
+            'verified_by' => null,
+            'verification_notes' => null,
+        ]);
+    }
+
+    /**
+     * Get verifier
+     */
+    public function verifier()
+    {
+        return $this->belongsTo(User::class, 'verified_by');
+    }
+
+    /**
      * Activity logs relationship
      */
     public function activityLogs()
     {
         return $this->hasMany(ActivityLog::class);
+    }
+
+    /**
+     * Alias for hasPermissionTo() for backward compatibility
+     */
+    public function hasPermission($permission)
+    {
+        return $this->hasPermissionTo($permission);
+    }
+
+    /**
+     * Check if user can view keuangan module
+     */
+    public function canViewKeuangan(): bool
+    {
+        return $this->isSuperAdmin() ||
+            $this->hasRole(['admin_keuangan', 'pengurus_keuangan']);
+    }
+
+    /**
+     * Check if user can manage keuangan module (create, update, delete)
+     */
+    public function canManageKeuangan(): bool
+    {
+        return $this->isSuperAdmin() ||
+            $this->hasRole(['admin_keuangan', 'pengurus_keuangan']);
     }
 }
